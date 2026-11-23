@@ -1,0 +1,126 @@
+name: cataloggate
+
+x-data-environment: &data-environment
+  DATABASE_URL: postgres://cataloggate:cataloggate-local@postgres:5432/cataloggate
+  MONGO_URL: mongodb://cataloggate:cataloggate-local@mongo:27017/?authSource=admin
+  MONGO_DB: cataloggate
+  RABBIT_URL: amqp://cataloggate:cataloggate-local@rabbitmq:5672?heartbeat=5
+
+x-runtime: &runtime
+  image: cataloggate-runtime:local
+  build:
+    context: .
+    target: runtime
+  init: true
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: cataloggate
+      POSTGRES_PASSWORD: cataloggate-local
+      POSTGRES_DB: cataloggate
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD, pg_isready, -h, 127.0.0.1, -U, cataloggate, -d, cataloggate]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  mongo:
+    image: mongo:8.0-noble
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: cataloggate
+      MONGO_INITDB_ROOT_PASSWORD: cataloggate-local
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: [CMD, mongosh, --quiet, --eval, 'quit(db.adminCommand({ping:1}).ok ? 0 : 1)']
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  rabbitmq:
+    hostname: cataloggate-rabbitmq
+    image: rabbitmq:4.1-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: cataloggate
+      RABBITMQ_DEFAULT_PASS: cataloggate-local
+    volumes:
+      - rabbit-data:/var/lib/rabbitmq
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, check_port_listener, '5672']
+      interval: 4s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    <<: *runtime
+    command: [node, dist/platform/migrate.js]
+    environment:
+      DATABASE_URL: postgres://cataloggate:cataloggate-local@postgres:5432/cataloggate
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *runtime
+    environment:
+      <<: *data-environment
+      REDIS_URL: redis://redis:6379
+      HOST: 0.0.0.0
+      PORT: '3000'
+    ports:
+      - '127.0.0.1:${CATALOGGATE_PORT:-3180}:3000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    <<: *runtime
+    command: [node, dist/main-worker.js]
+    environment: *data-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  checks:
+    profiles: [qa]
+    build:
+      context: .
+      target: checks
+    environment:
+      <<: *data-environment
+      REDIS_URL: redis://redis:6379
+      CATALOGGATE_URL: http://api:3000
+
+volumes:
+  postgres-data:
+  mongo-data:
+  rabbit-data:

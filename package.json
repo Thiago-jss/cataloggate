@@ -1,0 +1,49 @@
+{
+  "name": "cataloggate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Asynchronous supplier catalog auditing",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "lint": "eslint .",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:e2e": "node --test test/stack.e2e.mjs",
+    "start:api": "node dist/main-api.js",
+    "start:worker": "node dist/main-worker.js",
+    "migrate": "node dist/platform/migrate.js",
+    "demo": "node scripts/demo.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test:resilience": "node --test test/resilience.e2e.mjs"
+  },
+  "dependencies": {
+    "@nestjs/common": "11.2.11",
+    "@nestjs/core": "11.2.11",
+    "@nestjs/platform-express": "11.2.11",
+    "amqplib": "0.10.9",
+    "express": "5.3.0",
+    "mongodb": "7.9.1",
+    "pg": "8.23.1",
+    "redis": "5.12.4",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/amqplib": "0.10.8",
+    "@types/express": "5.0.6",
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "eslint": "10.15.0",
+    "globals": "16.5.0",
+    "prettier": "3.10.1",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.74.0"
+  }
+}

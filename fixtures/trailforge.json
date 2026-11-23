@@ -1,0 +1,7 @@
+{
+  "supplier": "trailforge",
+  "items": [
+    { "product": { "code": "BELL-11", "series": "urban" }, "inventory": { "available": 15 } },
+    { "product": { "code": "", "series": "outdoor" }, "inventory": { "available": 4 } }
+  ]
+}
