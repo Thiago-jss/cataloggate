@@ -1,0 +1,9 @@
+{
+  "supplier": "northwind",
+  "items": [
+    { "sku": "frame-42", "stock": 4, "material": "steel" },
+    { "sku": "CHAIN-18", "stock": -3, "note": "warehouse adjustment" },
+    { "sku": "LIGHT-09", "stock": 7 },
+    { "sku": "light-09", "stock": 2 }
+  ]
+}

@@ -1,0 +1,183 @@
+openapi: 3.1.0
+info:
+  title: CatalogGate
+  version: 0.1.0
+  description: Auditoria assíncrona de lotes de fornecedores fictícios.
+servers:
+  - url: http://127.0.0.1:3180
+paths:
+  /imports:
+    post:
+      operationId: submitImport
+      summary: Registra um lote para auditoria
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [supplier, items]
+              properties:
+                supplier: { type: string, enum: [northwind, trailforge] }
+                items:
+                  type: array
+                  minItems: 1
+                  maxItems: 500
+                  items: {}
+            example:
+              supplier: northwind
+              items:
+                - { sku: FRAME-42, stock: 4 }
+                - { sku: CHAIN-18, stock: -3 }
+      responses:
+        '202':
+          description: Lote registrado ou protocolo existente para um replay equivalente
+          headers:
+            Location:
+              schema: { type: string }
+              example: /imports/9d9699c0-d2e6-4b1e-b013-6f3a2faf14af
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportStatus' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/BodyTooLarge' }
+  /imports/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ImportId'
+    get:
+      operationId: readImport
+      summary: Consulta o estado do protocolo
+      responses:
+        '200':
+          description: Estado da importação
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportStatus' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /imports/{id}/report:
+    parameters:
+      - $ref: '#/components/parameters/ImportId'
+    get:
+      operationId: readReport
+      summary: Consulta os itens aceitos e os motivos de rejeição
+      responses:
+        '200':
+          description: Relatório concluído
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditReport' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503':
+          description: Relatório indisponível nas fontes duráveis
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Failure' }
+  /health:
+    get:
+      operationId: health
+      summary: Verifica se a API responde
+      responses:
+        '200':
+          description: API em execução
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { const: ok }
+components:
+  parameters:
+    ImportId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    BadRequest:
+      description: Entrada inválida
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Failure' }
+    NotFound:
+      description: Importação ou fornecedor não encontrado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Failure' }
+    Conflict:
+      description: Chave usada para outro lote ou relatório ainda indisponível
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Failure' }
+    BodyTooLarge:
+      description: Corpo maior que 128 KiB
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Failure' }
+  schemas:
+    Totals:
+      type: object
+      required: [accepted, rejected]
+      properties:
+        accepted: { type: integer, minimum: 0 }
+        rejected: { type: integer, minimum: 0 }
+    ImportStatus:
+      type: object
+      required: [id, supplier, status, itemCount, submittedAt, finishedAt, totals]
+      properties:
+        id: { type: string, format: uuid }
+        supplier: { type: string }
+        status: { enum: [pending, completed, failed] }
+        itemCount: { type: integer, minimum: 1, maximum: 500 }
+        submittedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+        totals:
+          oneOf:
+            - $ref: '#/components/schemas/Totals'
+            - type: 'null'
+    AuditReport:
+      type: object
+      required: [id, supplier, totals, accepted, rejected]
+      properties:
+        id: { type: string, format: uuid }
+        supplier: { type: string }
+        totals: { $ref: '#/components/schemas/Totals' }
+        accepted:
+          type: array
+          items:
+            type: object
+            required: [row, sku, stock]
+            properties:
+              row: { type: integer, minimum: 1 }
+              sku: { type: string }
+              stock: { type: integer, minimum: 0 }
+        rejected:
+          type: array
+          items:
+            type: object
+            required: [row, reasons, original]
+            properties:
+              row: { type: integer, minimum: 1 }
+              reasons:
+                type: array
+                minItems: 1
+                items: { enum: [INVALID_SKU, INVALID_STOCK, DUPLICATE_SKU] }
+              original: {}
+    Failure:
+      type: object
+      required: [status, code, message]
+      properties:
+        status: { type: integer }
+        code: { type: string }
+        message: { type: string }

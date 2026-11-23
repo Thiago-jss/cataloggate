@@ -1,0 +1,33 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+
+jobs:
+  cataloggate:
+    name: Build, tests and recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CATALOGGATE_TEST_PROJECT: cataloggate-ci
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Build and start isolated stack
+        run: docker compose -p cataloggate-ci up -d --build --wait --wait-timeout 120
+      - name: Lint, typecheck and unit tests
+        run: docker compose -p cataloggate-ci run --rm --no-deps --build checks sh -c 'npm run lint && npm run typecheck && npm test'
+      - name: HTTP and dependency integration tests
+        run: docker compose -p cataloggate-ci run --rm --no-deps checks
+      - name: Broker recovery and cache fallback
+        run: npm run test:resilience
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose -p cataloggate-ci logs --tail=40
+      - name: Remove CI-owned services and volumes
+        if: always()
+        run: docker compose -p cataloggate-ci down --volumes
