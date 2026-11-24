@@ -145,6 +145,60 @@ paths:
               schema: { $ref: '#/components/schemas/Release' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /imports/{id}/attempts:
+    parameters:
+      - $ref: '#/components/parameters/ImportId'
+    get:
+      operationId: importAttemptHistory
+      summary: Consulta até 50 tentativas recentes e as solicitações de reprocessamento
+      responses:
+        '200':
+          description: Histórico operacional do lote
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportHistory' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /imports/{id}/retry:
+    parameters:
+      - $ref: '#/components/parameters/ImportId'
+    post:
+      operationId: reprocessFailedImport
+      summary: Solicita reprocessamento de um lote em falha técnica
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedGeneration]
+              additionalProperties: false
+              properties:
+                expectedGeneration: { type: integer, minimum: 1, maximum: 6 }
+      responses:
+        '202':
+          description: Nova geração registrada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RetryReceipt' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /ops/metrics:
+    get:
+      operationId: readSupplierMetrics
+      summary: Consulta indicadores operacionais do fornecedor autenticado
+      responses:
+        '200':
+          description: Indicadores por fornecedor para revisores
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SupplierMetrics' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /health:
     get:
       security: []
@@ -242,11 +296,12 @@ components:
         rejected: { type: integer, minimum: 0 }
     ImportStatus:
       type: object
-      required: [id, supplier, status, itemCount, submittedAt, finishedAt, totals]
+      required: [id, supplier, status, generation, itemCount, submittedAt, finishedAt, totals]
       properties:
         id: { type: string, format: uuid }
         supplier: { type: string }
         status: { enum: [pending, completed, failed] }
+        generation: { type: integer, minimum: 1, maximum: 6 }
         itemCount: { type: integer, minimum: 1, maximum: 500 }
         submittedAt: { type: string, format: date-time }
         finishedAt: { type: [string, 'null'], format: date-time }
@@ -282,6 +337,57 @@ components:
                 minItems: 1
                 items: { enum: [INVALID_SKU, INVALID_STOCK, DUPLICATE_SKU] }
               original: {}
+    ImportHistory:
+      type: object
+      required: [attempts, retries]
+      properties:
+        attempts:
+          type: array
+          items:
+            type: object
+            required: [generation, id, outcome, startedAt, finishedAt]
+            properties:
+              generation: { type: integer, minimum: 1, maximum: 6 }
+              id: { type: string, format: uuid }
+              outcome: { enum: [running, succeeded, technical_failure, superseded] }
+              startedAt: { type: string, format: date-time }
+              finishedAt: { type: [string, 'null'], format: date-time }
+        retries:
+          type: array
+          items:
+            type: object
+            required: [generation, requestedBy, requestedAt]
+            properties:
+              generation: { type: integer, minimum: 2, maximum: 6 }
+              requestedBy: { type: string }
+              requestedAt: { type: string, format: date-time }
+    RetryReceipt:
+      type: object
+      required: [importId, generation, status]
+      properties:
+        importId: { type: string, format: uuid }
+        generation: { type: integer, minimum: 2, maximum: 6 }
+        status: { const: pending }
+    SupplierMetrics:
+      type: object
+      required:
+        [
+          pendingImports,
+          failedImports,
+          completedImports,
+          outboxBacklog,
+          processingAttempts,
+          failedAttempts,
+          meanCompletionMs,
+        ]
+      properties:
+        pendingImports: { type: integer, minimum: 0 }
+        failedImports: { type: integer, minimum: 0 }
+        completedImports: { type: integer, minimum: 0 }
+        outboxBacklog: { type: integer, minimum: 0 }
+        processingAttempts: { type: integer, minimum: 0 }
+        failedAttempts: { type: integer, minimum: 0 }
+        meanCompletionMs: { type: [number, 'null'], minimum: 0 }
     Failure:
       type: object
       required: [status, code, message]

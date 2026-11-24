@@ -1,10 +1,12 @@
+import type { Delivery } from './contracts';
+
 export interface ImportOutbox {
-  unsent(limit: number): Promise<string[]>;
-  markSent(id: string): Promise<void>;
+  unsent(limit: number): Promise<Delivery[]>;
+  markSent(delivery: Delivery): Promise<void>;
 }
 
 export interface ImportPublisher {
-  publish(id: string): Promise<void>;
+  publish(delivery: Delivery): Promise<void>;
 }
 
 export class DispatchImports {
@@ -14,9 +16,9 @@ export class DispatchImports {
   ) {}
 
   async execute(): Promise<void> {
-    for (const id of await this.outbox.unsent(10)) {
-      await this.publisher.publish(id);
-      await this.outbox.markSent(id);
+    for (const delivery of await this.outbox.unsent(10)) {
+      await this.publisher.publish(delivery);
+      await this.outbox.markSent(delivery);
     }
   }
 }

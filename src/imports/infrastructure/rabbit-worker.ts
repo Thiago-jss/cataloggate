@@ -6,19 +6,25 @@ import {
 import type { Channel, ChannelModel, ConsumeMessage } from 'amqplib';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
-import type { WorkStore } from '../application/contracts';
+import type { Delivery, WorkStore } from '../application/contracts';
 import type { ProcessImport } from '../application/process-import';
 import { IMPORT_QUEUE, closeRabbit, declareImportQueues, openRabbit } from './rabbit-link';
 
-const messageSchema = z.strictObject({ importId: z.uuid() });
+const messageSchema = z.strictObject({
+  importId: z.uuid(),
+  generation: z.int().min(1).max(6).optional(),
+});
 const ATTEMPTS_PER_DELIVERY = 3;
 
-function decode(message: ConsumeMessage): string | null {
+function decode(message: ConsumeMessage): Delivery | null {
   if (message.content.length > 256) return null;
   try {
     const result = messageSchema.safeParse(JSON.parse(message.content.toString('utf8')));
-    return result.success && message.properties.messageId === result.data.importId
-      ? result.data.importId
+    if (!result.success) return null;
+    const { importId, generation } = result.data;
+    const expectedId = generation === undefined ? importId : importId + ':' + generation;
+    return message.properties.messageId === expectedId
+      ? { importId: importId.toLowerCase(), generation: generation ?? 1 }
       : null;
   } catch {
     return null;
@@ -93,16 +99,20 @@ export class RabbitWorker implements OnApplicationBootstrap, BeforeApplicationSh
 
   private async handle(channel: Channel, message: ConsumeMessage): Promise<void> {
     try {
-      const id = decode(message);
-      if (!id) {
+      const delivery = decode(message);
+      if (!delivery) {
         channel.nack(message, false, false);
         return;
       }
+      const { importId, generation } = delivery;
       for (let attempt = 1; attempt <= ATTEMPTS_PER_DELIVERY; attempt += 1) {
         if (this.stop.signal.aborted) return;
         try {
-          await this.process.execute(id);
+          const outcome = await this.process.execute(delivery);
+          if (outcome === 'completed')
+            this.logger.log({ event: 'import_completed', importId, generation, attempt });
         } catch {
+          this.logger.warn({ event: 'import_attempt_failed', importId, generation, attempt });
           if (attempt < ATTEMPTS_PER_DELIVERY) await delay(250 * attempt);
           continue;
         }
@@ -111,8 +121,8 @@ export class RabbitWorker implements OnApplicationBootstrap, BeforeApplicationSh
       }
       if (this.stop.signal.aborted) return;
       try {
-        if (await this.work.fail(id)) {
-          this.logger.warn({ event: 'processing_attempts_exhausted', importId: id });
+        if (await this.work.fail(delivery)) {
+          this.logger.warn({ event: 'processing_attempts_exhausted', importId, generation });
           channel.nack(message, false, false);
         } else {
           channel.ack(message);

@@ -16,6 +16,8 @@ import {
   SupplierNotFound,
 } from '../application/import-errors';
 
+import { RetryConflict } from '../application/import-operations';
+
 type Failure = { status: number; code: string; message: string };
 
 function bodyParserFailure(error: unknown): Failure | undefined {
@@ -41,6 +43,12 @@ function knownFailure(error: unknown): Failure | undefined {
     return { status: 403, code: 'FORBIDDEN', message: 'Role not permitted for this operation' };
   if (error instanceof ReviewConflict)
     return { status: 409, code: error.code, message: 'Catalog review precondition not satisfied' };
+  if (error instanceof RetryConflict)
+    return {
+      status: 409,
+      code: error.code,
+      message: 'Import cannot be reprocessed in its current state',
+    };
   if (error instanceof SupplierNotFound)
     return { status: 404, code: 'SUPPLIER_NOT_FOUND', message: 'Unknown supplier' };
   if (error instanceof ImportNotFound)

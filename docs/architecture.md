@@ -21,7 +21,7 @@ Os contratos de leitura, submissão e execução são separados: ler um relatór
 
 1. O HTTP valida JSON, profundidade, tamanho e chave idempotente. O formato do fornecedor é consultado no banco e registrado no lote; o cliente não escolhe como os dados serão interpretados.
 2. Uma transação grava o lote e a outbox no PostgreSQL. O original fica no lote como buffer de entrada. A API só devolve `202` após o commit. A identidade é `(fornecedor, chave)`; um hash do JSON canônico ignora a ordem das chaves de objetos, mas preserva a ordem das linhas. Mesma chave com conteúdo diferente dá `409`.
-3. O publicador busca eventos pendentes e envia `{ importId }` no RabbitMQ. Só atualiza `sent_at` depois de uma confirmação positiva e roteável. As filas são duráveis e as mensagens de trabalho, persistentes. Não há transação distribuída entre banco e broker.
+3. O publicador busca eventos pendentes e envia `{ importId, generation }` no RabbitMQ. Só atualiza `sent_at` depois de uma confirmação positiva e roteável. As filas são duráveis e as mensagens de trabalho, persistentes. Não há transação distribuída entre banco e broker.
 4. O worker interpreta o lote e faz um upsert imutável no MongoDB, com `_id` igual ao protocolo. O documento guarda o JSON original como texto e tem resultados estruturados (linhas aceitas e motivos de rejeição). Não há uso de campos externos como operadores ou chaves de consulta. O PostgreSQL passa para `completed`, grava os totais e libera o buffer somente depois da gravação no MongoDB. O relatório fica visível só depois dessa transição.
 5. A consulta confirma o estado no PostgreSQL, depois usa Redis como cache-aside do relatório consolidado. Resultados concluídos não mudam nesta versão; uma correção é um novo lote. Isso dispensa invalidar relatórios existentes a cada envio.
 
@@ -40,14 +40,24 @@ O operador envia; o revisor publica. As duas identidades só consultam o própri
 | Worker fecha a conexão após gravar no MongoDB, antes de finalizar no PostgreSQL | A auditoria existente é reutilizada; a nova tentativa conclui o estado e os totais.                                                                                                                                                  |
 | Worker termina de gravar, mas não confirma a entrega                            | Uma nova entrega não muda o lote já concluído e é confirmada.                                                                                                                                                                        |
 | Mensagem inválida ou falhas de processamento esgotadas                          | Mensagens inválidas vão para a fila de descarte. Após três tentativas por entrega, o worker tenta registrar `failed` e encaminhar a mensagem à mesma fila. Se não consegue persistir o estado, ele solicita reentrega com uma pausa. |
+| Worker indisponível                                                             | O lote permanece pendente. O broker entrega o trabalho quando o consumidor volta.                                                                                                                                                    |
+| MongoDB indisponível além das tentativas                                        | O lote fica `failed` com histórico de falhas técnicas. Um revisor pode registrar nova geração preservando o protocolo.                                                                                                               |
 | Redis indisponível                                                              | Leitura pelo PostgreSQL e MongoDB; o cache tem tempo de espera curto e não é autoridade.                                                                                                                                             |
 
 Garantia intencional: **entrega pelo menos uma vez sob as falhas recuperáveis exercitadas, com efeito idempotente**. Não há promessa de entrega exatamente uma vez, FIFO de negócio, ou recuperação após perda física dos volumes. A composição padrão executa um publicador e um consumidor. Não faz eleição de líder nem pretende demonstrar alta disponibilidade de broker ou bancos.
+
+## Reprocessamento e operação
+
+Cada lote começa na geração `1`. Uma entrega de outra geração nunca altera o lote. O worker registra a tentativa antes de processar; a conclusão da geração e da tentativa vencedora é confirmada em uma transação PostgreSQL. Tentativas que perderam a corrida ou ficaram abertas quando outra tentativa finalizou a geração são marcadas como `superseded`. O histórico é separado da trilha de publicações.
+
+O reprocessamento aceita apenas `failed`, com versão esperada e autorização de revisor para o fornecedor. Em uma única transação, o lote volta a `pending`, a geração avança, a outbox recebe uma nova entrada e registra-se quem solicitou. Até cinco reprocessamentos podem ser pedidos por lote, além da execução inicial. Um lote concluído com rejeições de negócio exige uma nova submissão corrigida, não um reprocessamento técnico.
+
+Logs JSON correlacionam protocolo, geração e tentativa sem incluir credenciais ou itens. Métricas são computadas no PostgreSQL e restritas ao fornecedor do revisor. Backlog significa eventos ainda não confirmados pelo publicador; não é uma medição direta das mensagens no broker.
 
 ## Escopo local
 
 - Apenas dois fornecedores fictícios e lotes JSON de 1 a 500 itens, limitados a 128 KiB e 20 níveis de aninhamento nos itens.
 - SKU é normalizado para maiúsculas; todas as linhas com o mesmo SKU válido são rejeitadas, inclusive quando uma delas também falha por outro motivo. Estoque deve ser um inteiro seguro não negativo, sem coerção.
-- Não integra uma loja externa. Não há frontend, retenção automática, painel de recuperação ou multi-tenancy organizacional. As permissões de demonstração são escopadas por fornecedor. A falha terminal exige análise do operador e uma nova submissão com outra chave.
+- Não integra uma loja externa. Não há frontend, retenção automática, painel de recuperação ou multi-tenancy organizacional. As permissões de demonstração são escopadas por fornecedor. A recuperação técnica é manual pelo revisor via API; não há política automática de retenção ou arquivamento.
 - As credenciais locais são geradas por instalação, sem portas públicas nos bancos, cache ou broker. Não use dados reais. Um rollout público exigiria gestão de identidade e segredos, TLS, limites por cliente, uma política de retenção e operação do ambiente.
 - A migração versionada é aplicada por um processo único no startup do Compose. A stack de testes usa dados isolados; não se executa interrupção de dependências em serviços compartilhados.

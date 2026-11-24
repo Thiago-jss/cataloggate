@@ -12,6 +12,9 @@ import { PostgresActors } from '../identity/postgres-actors';
 import { openMongo, openPostgres } from '../platform/clients';
 import type { loadApiEnvironment, loadDataEnvironment } from '../platform/environment';
 import { DispatchImports } from './application/dispatch-imports';
+import { ImportOperations } from './application/import-operations';
+import { OperationsController } from './http/operations-controller';
+import { PostgresOperations } from './infrastructure/postgres-operations';
 import { ReadImport, ReadReport } from './application/import-queries';
 import { ProcessImport } from './application/process-import';
 import { SubmitImport } from './application/submit-import';
@@ -62,10 +65,16 @@ export class ImportsModule {
   static api(env: ApiEnvironment): DynamicModule {
     return {
       module: ImportsModule,
-      controllers: [ImportsController, ReviewsController, HealthController],
+      controllers: [ImportsController, ReviewsController, OperationsController, HealthController],
       providers: [
         ...stores(env),
         ActorGuard,
+        {
+          provide: ImportOperations,
+          inject: [DatabaseClients],
+          useFactory: (db: DatabaseClients) =>
+            new ImportOperations(new PostgresOperations(db.postgres)),
+        },
         {
           provide: PostgresActors,
           inject: [DatabaseClients],

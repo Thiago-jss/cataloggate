@@ -1,12 +1,13 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
+import { ConsoleLogger } from '@nestjs/common';
 import { ImportsModule } from './imports/imports.module';
 import { loadDataEnvironment } from './platform/environment';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.createApplicationContext(
     ImportsModule.worker(loadDataEnvironment()),
-    { abortOnError: false },
+    { abortOnError: false, logger: new ConsoleLogger({ json: true }) },
   );
   app.enableShutdownHooks();
 }

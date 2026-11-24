@@ -1,14 +1,16 @@
 import type { ChannelModel, ConfirmChannel, Message } from 'amqplib';
+import type { Delivery } from '../application/contracts';
 import type { ImportPublisher } from '../application/dispatch-imports';
 import { IMPORT_QUEUE, closeRabbit, declareImportQueues, openRabbit } from './rabbit-link';
 
 type Session = { connection: ChannelModel; channel: ConfirmChannel };
 
-function confirmPublish(channel: ConfirmChannel, id: string): Promise<void> {
+function confirmPublish(channel: ConfirmChannel, delivery: Delivery): Promise<void> {
+  const messageId = delivery.importId + ':' + delivery.generation;
   return new Promise<void>((resolve, reject) => {
     let returned = false;
     const onReturn = (message: Message) => {
-      if (message.properties.messageId === id) returned = true;
+      if (message.properties.messageId === messageId) returned = true;
     };
     const timer = setTimeout(() => finish(new Error('RabbitMQ confirmation timed out')), 3_000);
     function finish(error?: Error | null): void {
@@ -22,12 +24,12 @@ function confirmPublish(channel: ConfirmChannel, id: string): Promise<void> {
     try {
       channel.sendToQueue(
         IMPORT_QUEUE,
-        Buffer.from(JSON.stringify({ importId: id })),
+        Buffer.from(JSON.stringify(delivery)),
         {
           persistent: true,
           mandatory: true,
           contentType: 'application/json',
-          messageId: id,
+          messageId,
         },
         finish,
       );
@@ -42,10 +44,10 @@ export class RabbitPublisher implements ImportPublisher {
 
   constructor(private readonly url: string) {}
 
-  async publish(id: string): Promise<void> {
+  async publish(delivery: Delivery): Promise<void> {
     try {
       const session = this.session ?? (await this.open());
-      await confirmPublish(session.channel, id);
+      await confirmPublish(session.channel, delivery);
     } catch (error) {
       await this.close();
       throw error;
