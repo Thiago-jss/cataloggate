@@ -4,9 +4,10 @@
 
 ## Demonstração
 
-Com Docker e Docker Compose, na raiz do repositório:
+Com Node.js 24+, Docker e Docker Compose, na raiz do repositório:
 
 ```sh
+node scripts/bootstrap.mjs
 docker compose up -d --build --wait
 docker compose run --rm --no-deps --build checks npm run demo
 ```
@@ -60,7 +61,7 @@ A regra de auditoria não importa NestJS, banco ou broker. O módulo `imports` s
 
 ## Validação
 
-Sem exigir Node.js no host, rode os testes dentro do Compose:
+Com a stack em execução, rode os testes dentro do Compose:
 
 ```sh
 docker compose run --rm --no-deps --build checks sh -c 'npm run lint && npm run typecheck && npm test'
@@ -77,5 +78,7 @@ docker compose -p cataloggate-qa up -d --build --wait
 env CATALOGGATE_TEST_PROJECT=cataloggate-qa npm run test:resilience
 docker compose -p cataloggate-qa down
 ```
+
+As credenciais locais são geradas uma vez em `.env` (ignorado pelo Git e pelo build), e a CI gera as suas por execução. Veja [configuração e privilégios](docs/configuration.md).
 
 Use `down --volumes` apenas se quiser apagar os dados do projeto Compose especificado. A stack padrão é uma demonstração local, sem autenticação: só a API é publicada, em loopback. Use dados fictícios.

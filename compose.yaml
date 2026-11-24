@@ -1,10 +1,13 @@
 name: cataloggate
 
-x-data-environment: &data-environment
-  DATABASE_URL: postgres://cataloggate:cataloggate-local@postgres:5432/cataloggate
-  MONGO_URL: mongodb://cataloggate:cataloggate-local@mongo:27017/?authSource=admin
+x-app-environment: &app-environment
+  DATABASE_URL: postgres://cataloggate_app:${POSTGRES_APP_PASSWORD:?run node scripts/bootstrap.mjs}@postgres:5432/cataloggate
   MONGO_DB: cataloggate
-  RABBIT_URL: amqp://cataloggate:cataloggate-local@rabbitmq:5672?heartbeat=5
+  RABBIT_URL: amqp://cataloggate:${RABBIT_PASSWORD:?run node scripts/bootstrap.mjs}@rabbitmq:5672/cataloggate?heartbeat=5
+
+x-read-environment: &read-environment
+  MONGO_URL: mongodb://audit_reader:${MONGO_READER_PASSWORD:?run node scripts/bootstrap.mjs}@mongo:27017/?authSource=cataloggate
+  REDIS_URL: redis://:${REDIS_PASSWORD:?run node scripts/bootstrap.mjs}@redis:6379
 
 x-runtime: &runtime
   image: cataloggate-runtime:local
@@ -17,13 +20,15 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: cataloggate
-      POSTGRES_PASSWORD: cataloggate-local
+      POSTGRES_USER: cataloggate_migrator
+      POSTGRES_PASSWORD: ${POSTGRES_MIGRATION_PASSWORD:?run node scripts/bootstrap.mjs}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?run node scripts/bootstrap.mjs}
       POSTGRES_DB: cataloggate
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-secure-data:/var/lib/postgresql/data
+      - ./infra/postgres:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: [CMD, pg_isready, -h, 127.0.0.1, -U, cataloggate, -d, cataloggate]
+      test: [CMD, pg_isready, -h, 127.0.0.1, -U, cataloggate_migrator, -d, cataloggate]
       interval: 2s
       timeout: 3s
       retries: 20
@@ -31,12 +36,17 @@ services:
   mongo:
     image: mongo:8.0-noble
     environment:
-      MONGO_INITDB_ROOT_USERNAME: cataloggate
-      MONGO_INITDB_ROOT_PASSWORD: cataloggate-local
+      MONGO_INITDB_ROOT_USERNAME: cataloggate_mongo_admin
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ADMIN_PASSWORD:?run node scripts/bootstrap.mjs}
+      MONGO_INITDB_DATABASE: cataloggate
+      MONGO_READER_PASSWORD: ${MONGO_READER_PASSWORD:?run node scripts/bootstrap.mjs}
+      MONGO_WORKER_PASSWORD: ${MONGO_WORKER_PASSWORD:?run node scripts/bootstrap.mjs}
     volumes:
-      - mongo-data:/data/db
+      - mongo-secure-data:/data/db
+      - ./infra/mongo:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: [CMD, mongosh, --quiet, --eval, 'quit(db.adminCommand({ping:1}).ok ? 0 : 1)']
+      test:
+        [CMD, mongosh, --quiet, --host, mongo, --eval, 'quit(db.adminCommand({ping:1}).ok ? 0 : 1)']
       interval: 3s
       timeout: 5s
       retries: 20
@@ -46,9 +56,10 @@ services:
     image: rabbitmq:4.1-alpine
     environment:
       RABBITMQ_DEFAULT_USER: cataloggate
-      RABBITMQ_DEFAULT_PASS: cataloggate-local
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASSWORD:?run node scripts/bootstrap.mjs}
+      RABBITMQ_DEFAULT_VHOST: cataloggate
     volumes:
-      - rabbit-data:/var/lib/rabbitmq
+      - rabbit-secure-data:/var/lib/rabbitmq
     healthcheck:
       test: [CMD, rabbitmq-diagnostics, -q, check_port_listener, '5672']
       interval: 4s
@@ -57,8 +68,20 @@ services:
 
   redis:
     image: redis:7.4-alpine
+    user: redis
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?run node scripts/bootstrap.mjs}
+    command:
+      - sh
+      - -ec
+      - |
+        umask 077
+        config=$$(mktemp)
+        case "$$REDIS_PASSWORD" in *[!0-9a-f]*|'') exit 1;; esac
+        printf 'requirepass %s\n' "$$REDIS_PASSWORD" > "$$config"
+        exec redis-server "$$config"
     healthcheck:
-      test: [CMD, redis-cli, ping]
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -qx PONG']
       interval: 2s
       timeout: 3s
       retries: 20
@@ -67,7 +90,7 @@ services:
     <<: *runtime
     command: [node, dist/platform/migrate.js]
     environment:
-      DATABASE_URL: postgres://cataloggate:cataloggate-local@postgres:5432/cataloggate
+      DATABASE_URL: postgres://cataloggate_migrator:${POSTGRES_MIGRATION_PASSWORD:?run node scripts/bootstrap.mjs}@postgres:5432/cataloggate
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,8 +98,7 @@ services:
   api:
     <<: *runtime
     environment:
-      <<: *data-environment
-      REDIS_URL: redis://redis:6379
+      <<: [*app-environment, *read-environment]
       HOST: 0.0.0.0
       PORT: '3000'
     ports:
@@ -101,7 +123,9 @@ services:
   worker:
     <<: *runtime
     command: [node, dist/main-worker.js]
-    environment: *data-environment
+    environment:
+      <<: *app-environment
+      MONGO_URL: mongodb://audit_worker:${MONGO_WORKER_PASSWORD:?run node scripts/bootstrap.mjs}@mongo:27017/?authSource=cataloggate
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -116,11 +140,10 @@ services:
       context: .
       target: checks
     environment:
-      <<: *data-environment
-      REDIS_URL: redis://redis:6379
+      <<: [*app-environment, *read-environment]
       CATALOGGATE_URL: http://api:3000
 
 volumes:
-  postgres-data:
-  mongo-data:
-  rabbit-data:
+  postgres-secure-data:
+  mongo-secure-data:
+  rabbit-secure-data:
