@@ -8,9 +8,12 @@ import {
   Param,
   Post,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
+import type { Actor } from '../../identity/actor';
+import { ActorGuard, CurrentActor } from '../../identity/actor-guard';
 import { ReadImport, ReadReport } from '../application/import-queries';
 import { SubmitImport, type SubmittedItems } from '../application/submit-import';
 
@@ -45,6 +48,7 @@ function readItems(items: unknown[]): SubmittedItems {
 }
 
 @Controller('imports')
+@UseGuards(ActorGuard)
 export class ImportsController {
   constructor(
     private readonly submit: SubmitImport,
@@ -55,6 +59,7 @@ export class ImportsController {
   @Post()
   @HttpCode(202)
   async register(
+    @CurrentActor() actor: Actor,
     @Body() body: unknown,
     @Headers('idempotency-key') header: unknown,
     @Res({ passthrough: true }) res: Response,
@@ -63,19 +68,24 @@ export class ImportsController {
     if (!input.success)
       throw new BadRequestException('Expected a supplier and an array containing 1–500 items');
     const key = readUuid(header, 'Idempotency-Key');
-    const result = await this.submit.execute(input.data.supplier, key, readItems(input.data.items));
+    const result = await this.submit.execute(
+      actor,
+      input.data.supplier,
+      key,
+      readItems(input.data.items),
+    );
     res.location('/imports/' + result.id);
     return result;
   }
 
   @Get(':id')
-  status(@Param('id') id: string) {
-    return this.current.execute(readUuid(id, 'Import ID'));
+  status(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.current.execute(readUuid(id, 'Import ID'), actor.supplier);
   }
 
   @Get(':id/report')
-  details(@Param('id') id: string) {
-    return this.report.execute(readUuid(id, 'Import ID'));
+  details(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.report.execute(readUuid(id, 'Import ID'), actor.supplier);
   }
 }
 

@@ -39,8 +39,8 @@ function toStatus(row: Row): ImportStatus {
 async function writeImport(client: PoolClient, input: NewImport): Promise<Row> {
   const inserted = await client.query<Row>(
     `
-    INSERT INTO catalog_imports (id, supplier_code, idempotency_key, fingerprint, supplier_format, payload, item_count)
-    SELECT $1, code, $3, $4, format, $5, $6 FROM suppliers WHERE code = $2
+    INSERT INTO catalog_imports (id, supplier_code, idempotency_key, fingerprint, supplier_format, payload, item_count, submitted_by)
+    SELECT $1, code, $3, $4, format, $5, $6, $7 FROM suppliers WHERE code = $2
     ON CONFLICT (supplier_code, idempotency_key) DO NOTHING
     RETURNING *`,
     [
@@ -50,6 +50,7 @@ async function writeImport(client: PoolClient, input: NewImport): Promise<Row> {
       input.fingerprint,
       input.payload,
       input.itemCount,
+      input.submittedBy,
     ],
   );
   const created = inserted.rows[0];
@@ -97,12 +98,12 @@ export class PostgresImports implements IntakeStore, WorkStore, StatusStore {
     }
   }
 
-  async find(id: string): Promise<ImportStatus | null> {
+  async find(id: string, supplier: string): Promise<ImportStatus | null> {
     const { rows } = await this.pool.query<Row>(
       `
       SELECT id, supplier_code, state, item_count, submitted_at, finished_at, accepted_count, rejected_count
-      FROM catalog_imports WHERE id = $1`,
-      [id],
+      FROM catalog_imports WHERE id = $1 AND supplier_code = $2`,
+      [id, supplier],
     );
     return rows[0] ? toStatus(rows[0]) : null;
   }

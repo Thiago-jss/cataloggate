@@ -5,6 +5,8 @@ info:
   description: Auditoria assíncrona de lotes de fornecedores fictícios.
 servers:
   - url: http://127.0.0.1:3180
+security:
+  - DemoBearer: []
 paths:
   /imports:
     post:
@@ -45,9 +47,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ImportStatus' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '413': { $ref: '#/components/responses/BodyTooLarge' }
   /imports/{id}:
     parameters:
@@ -61,6 +65,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ImportStatus' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
   /imports/{id}/report:
@@ -75,6 +80,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuditReport' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -83,8 +89,65 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Failure' }
+  /imports/{id}/preview:
+    parameters:
+      - $ref: '#/components/parameters/ImportId'
+    get:
+      operationId: previewCatalog
+      summary: Compara os SKUs de um lote válido com a versão atual
+      responses:
+        '200':
+          description: Prévia e versão base
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Preview' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /imports/{id}/publish:
+    parameters:
+      - $ref: '#/components/parameters/ImportId'
+    post:
+      operationId: publishCatalog
+      summary: Publica um lote auditado como revisor autorizado
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedVersion]
+              additionalProperties: false
+              properties:
+                expectedVersion: { type: integer, minimum: 0 }
+      responses:
+        '201':
+          description: Versão publicada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Release' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /imports/{id}/release:
+    parameters:
+      - $ref: '#/components/parameters/ImportId'
+    get:
+      operationId: readCatalogRelease
+      summary: Consulta a decisão e as mudanças de um lote publicado
+      responses:
+        '200':
+          description: Registro da publicação
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Release' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /health:
     get:
+      security: []
       operationId: health
       summary: Verifica se a API responde
       responses:
@@ -98,6 +161,11 @@ paths:
                 properties:
                   status: { const: ok }
 components:
+  securitySchemes:
+    DemoBearer:
+      type: http
+      scheme: bearer
+      description: Chave local do operador ou revisor provisionado.
   parameters:
     ImportId:
       in: path
@@ -105,6 +173,16 @@ components:
       required: true
       schema: { type: string, format: uuid }
   responses:
+    Unauthorized:
+      description: Credencial Bearer ausente ou inválida
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Failure' }
+    Forbidden:
+      description: Função não autorizada para executar a ação
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Failure' }
     BadRequest:
       description: Entrada inválida
       content:
@@ -126,6 +204,36 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Failure' }
   schemas:
+    StockChange:
+      type: object
+      required: [sku, before, after, kind]
+      properties:
+        sku: { type: string }
+        before: { type: [integer, 'null'], minimum: 0 }
+        after: { type: integer, minimum: 0 }
+        kind: { enum: [added, updated, unchanged] }
+    Preview:
+      type: object
+      required: [importId, supplier, baseVersion, changes]
+      properties:
+        importId: { type: string, format: uuid }
+        supplier: { type: string }
+        baseVersion: { type: integer, minimum: 0 }
+        changes:
+          type: array
+          items: { $ref: '#/components/schemas/StockChange' }
+    Release:
+      type: object
+      required: [importId, supplier, version, approvedBy, publishedAt, changes]
+      properties:
+        importId: { type: string, format: uuid }
+        supplier: { type: string }
+        version: { type: integer, minimum: 1 }
+        approvedBy: { type: string }
+        publishedAt: { type: string, format: date-time }
+        changes:
+          type: array
+          items: { $ref: '#/components/schemas/StockChange' }
     Totals:
       type: object
       required: [accepted, rejected]

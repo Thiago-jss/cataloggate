@@ -1,7 +1,8 @@
 # Configuração e privilégios
 
-`node scripts/bootstrap.mjs` provisiona o `.env` local com valores aleatórios independentes, não os imprime e não sobrescreve um arquivo existente. `.env.example` é só o contrato. O Git ignora os arquivos gerados e o Docker não os copia para a imagem. O Compose recusa variáveis obrigatórias ausentes. O runner de CI gera e descarta a própria configuração.
+`node scripts/bootstrap.mjs` provisiona o `.env` local com valores aleatórios independentes, não os imprime e não sobrescreve um arquivo existente. `.env.example` é só o contrato. O Git ignora os arquivos gerados e o Docker não os copia para a imagem. O Compose recusa variáveis obrigatórias ausentes. O runner de CI gera e descarta a própria configuração. Se já tiver um `.env` da primeira etapa de hardening, `node scripts/bootstrap.mjs --extend` acrescenta as chaves de demo que faltam sem substituir os valores existentes.
 
+- Identidades de demo: quatro chaves de alta entropia, uma por função e fornecedor. O PostgreSQL armazena apenas o resumo SHA-256; API e worker não recebem as chaves brutas. Use as chaves locais com `Authorization: Bearer ...`.
 - PostgreSQL: o processo de migração usa a conta de administração do ambiente local. API e worker usam `cataloggate_app`, sem criação de tabelas nem acesso à trilha interna de migrações.
 - MongoDB: a entrada de dados é reservada ao worker. A API usa uma conta com `find` na coleção de auditoria. Nenhum dos dois recebe as credenciais de administração.
 - RabbitMQ: namespace próprio de vhost; o broker não publica AMQP nem interface administrativa para o host. Redis exige autenticação e não publica porta.

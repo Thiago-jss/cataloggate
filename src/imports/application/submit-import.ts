@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { requireRole, type Actor } from '../../identity/actor';
 import { type ImportStatus, type IntakeStore } from './contracts';
 import { IdempotencyConflict, SupplierNotFound } from './import-errors';
 
@@ -18,14 +19,18 @@ export class SubmitImport {
   constructor(private readonly store: IntakeStore) {}
 
   async execute(
+    actor: Actor,
     supplier: string,
     idempotencyKey: string,
     items: SubmittedItems,
   ): Promise<ImportStatus> {
-    if (!(await this.store.sourceExists(supplier))) throw new SupplierNotFound();
+    requireRole(actor, 'operator');
+    if (actor.supplier !== supplier || !(await this.store.sourceExists(supplier)))
+      throw new SupplierNotFound();
     const fingerprint = createHash('sha256').update(canonicalize(items)).digest('hex');
     const registered = await this.store.accept({
       id: randomUUID(),
+      submittedBy: actor.id,
       supplier,
       idempotencyKey,
       fingerprint,

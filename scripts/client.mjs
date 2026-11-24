@@ -4,8 +4,18 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 export const base = process.env.CATALOGGATE_URL ?? 'http://127.0.0.1:3180';
 
-export async function request(path, init, url = base) {
-  const response = await fetch(new URL(path, url), { ...init, signal: AbortSignal.timeout(5_000) });
+export function demoKey(supplier = 'northwind', role = 'operator') {
+  return process.env[supplier.toUpperCase() + '_' + role.toUpperCase() + '_KEY'];
+}
+
+export async function request(path, init, url = base, token = demoKey()) {
+  const headers = new Headers(init?.headers);
+  if (token) headers.set('authorization', 'Bearer ' + token);
+  const response = await fetch(new URL(path, url), {
+    ...init,
+    headers,
+    signal: AbortSignal.timeout(5_000),
+  });
   return {
     status: response.status,
     body: await response.json(),
@@ -13,7 +23,12 @@ export async function request(path, init, url = base) {
   };
 }
 
-export function submit(body, key = randomUUID(), url = base) {
+export function submit(
+  body,
+  key = randomUUID(),
+  url = base,
+  token = demoKey(body.supplier) ?? demoKey(),
+) {
   return request(
     '/imports',
     {
@@ -22,6 +37,7 @@ export function submit(body, key = randomUUID(), url = base) {
       body: JSON.stringify(body),
     },
     url,
+    token,
   );
 }
 
@@ -35,9 +51,9 @@ export async function until(probe, description, timeout = 25_000) {
   throw new Error('Timed out: ' + description);
 }
 
-export function completed(id, url = base) {
+export function completed(id, url = base, token = demoKey()) {
   return until(async () => {
-    const { status, body } = await request('/imports/' + id, undefined, url);
+    const { status, body } = await request('/imports/' + id, undefined, url, token);
     if (status !== 200 || body.status === 'failed')
       throw new Error('Import did not complete: ' + JSON.stringify(body));
     return body.status === 'completed' ? body : null;

@@ -18,7 +18,7 @@
     "demo": "node scripts/demo.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test:resilience": "node --test test/resilience.e2e.mjs"
+    "test:resilience": "node --env-file-if-exists=.env --test test/resilience.e2e.mjs"
   },
   "dependencies": {
     "@nestjs/common": "11.2.11",

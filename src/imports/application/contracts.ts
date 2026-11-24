@@ -11,6 +11,7 @@ export type ImportStatus = {
   totals: AuditTotals | null;
 };
 export type NewImport = {
+  submittedBy: string;
   id: string;
   supplier: string;
   idempotencyKey: string;
@@ -39,7 +40,7 @@ export interface WorkStore {
 }
 
 export interface StatusStore {
-  find(id: string): Promise<ImportStatus | null>;
+  find(id: string, supplier: string): Promise<ImportStatus | null>;
 }
 
 export interface AuditWriter {

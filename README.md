@@ -1,6 +1,6 @@
 # CatalogGate
 
-**Auditoria assíncrona de catálogos de fornecedores.** Envie um lote, receba um protocolo e consulte quais itens passam na validação, quais foram rejeitados e o dado original que explica cada rejeição.
+**Auditoria e publicação versionada de catálogos de fornecedores.** Envie um lote, acompanhe as rejeições e, quando estiver válido, revise as diferenças antes de aplicar as mudanças ao estoque.
 
 ## Demonstração
 
@@ -19,21 +19,25 @@ A demo envia dois lotes fictícios, aguarda o worker e confere os resultados ant
 | Northwind  | Plano (`sku`, `stock`)                           |             1 | 3: estoque negativo e duas linhas com SKU duplicado |
 | Trailforge | Aninhado (`product.code`, `inventory.available`) |             1 |                                     1: SKU inválido |
 
-Em cada rejeição, a demo imprime a linha, os códigos e o item original. As fixtures estão em [`fixtures/`](fixtures/). A API fica em `http://127.0.0.1:3180` e pode ser usada sem frontend:
+Em cada rejeição, a demo imprime a linha, os códigos e o item original. Depois, submete um lote válido, comprova que o operador não pode aprová-lo e publica com a credencial de revisor. As fixtures estão em [`fixtures/`](fixtures/). A API fica em `http://127.0.0.1:3180` e pode ser usada sem frontend. No exemplo, `NORTHWIND_OPERATOR_KEY` deve estar disponível na sua sessão local. Não cole a chave em arquivos versionados:
 
 ```sh
 curl -i http://127.0.0.1:3180/imports \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $NORTHWIND_OPERATOR_KEY" \
   -H 'Idempotency-Key: 9d9699c0-d2e6-4b1e-b013-6f3a2faf14af' \
   --data-binary @fixtures/northwind.json
 ```
 
-| Rota                      | Resultado                                                                                                        |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `POST /imports`           | `202 Accepted` com o protocolo e o header `Location`. Mesma chave e mesmo lote devolvem o mesmo protocolo.       |
-| `GET /imports/:id`        | Estado `pending`, `completed` ou `failed`. Um lote pode estar concluído mesmo que contenha rejeições de negócio. |
-| `GET /imports/:id/report` | Relatório concluído ou `409 REPORT_NOT_AVAILABLE`.                                                               |
-| `GET /health`             | Verifica se a API responde; não é uma inspeção das dependências.                                                 |
+| Rota                        | Resultado                                                                                                        |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `POST /imports`             | `202 Accepted` com o protocolo e o header `Location`. Mesma chave e mesmo lote devolvem o mesmo protocolo.       |
+| `GET /imports/:id`          | Estado `pending`, `completed` ou `failed`. Um lote pode estar concluído mesmo que contenha rejeições de negócio. |
+| `GET /imports/:id/report`   | Relatório concluído ou `409 REPORT_NOT_AVAILABLE`.                                                               |
+| `GET /imports/:id/preview`  | Prévia das alterações para o lote válido, com a versão base do catálogo.                                         |
+| `POST /imports/:id/publish` | Revisor publica com `expectedVersion`; uma prévia obsoleta é recusada.                                           |
+| `GET /imports/:id/release`  | Registro imutável da versão publicada por esse lote.                                                             |
+| `GET /health`               | Verifica se a API responde; não é uma inspeção das dependências.                                                 |
 
 Consulte o [contrato OpenAPI](docs/openapi.yaml) para exemplos, limites e códigos de resposta.
 
@@ -81,4 +85,4 @@ docker compose -p cataloggate-qa down
 
 As credenciais locais são geradas uma vez em `.env` (ignorado pelo Git e pelo build), e a CI gera as suas por execução. Veja [configuração e privilégios](docs/configuration.md).
 
-Use `down --volumes` apenas se quiser apagar os dados do projeto Compose especificado. A stack padrão é uma demonstração local, sem autenticação: só a API é publicada, em loopback. Use dados fictícios.
+Use `down --volumes` apenas se quiser apagar os dados do projeto Compose especificado. A stack padrão é uma demonstração local com chaves por fornecedor e função. Só a API é publicada, em loopback. Use dados fictícios.

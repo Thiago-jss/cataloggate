@@ -6,6 +6,8 @@ import {
   type ExceptionFilter,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { ReviewConflict } from '../../catalog/application/catalog-review';
+import { RoleNotPermitted } from '../../identity/actor';
 import {
   IdempotencyConflict,
   ImportNotFound,
@@ -35,6 +37,10 @@ function bodyParserFailure(error: unknown): Failure | undefined {
 function knownFailure(error: unknown): Failure | undefined {
   const parserFailure = bodyParserFailure(error);
   if (parserFailure) return parserFailure;
+  if (error instanceof RoleNotPermitted)
+    return { status: 403, code: 'FORBIDDEN', message: 'Role not permitted for this operation' };
+  if (error instanceof ReviewConflict)
+    return { status: 409, code: error.code, message: 'Catalog review precondition not satisfied' };
   if (error instanceof SupplierNotFound)
     return { status: 404, code: 'SUPPLIER_NOT_FOUND', message: 'Unknown supplier' };
   if (error instanceof ImportNotFound)
@@ -59,6 +65,8 @@ function knownFailure(error: unknown): Failure | undefined {
     };
   if (error instanceof HttpException) {
     const status = error.getStatus();
+    if (status === 401)
+      return { status, code: 'UNAUTHORIZED', message: 'Valid bearer credential required' };
     if (status === 400) return { status, code: 'BAD_REQUEST', message: error.message };
     if (status === 413)
       return { status, code: 'PAYLOAD_TOO_LARGE', message: 'The JSON body exceeds 128 KiB' };
@@ -77,6 +85,7 @@ export class ApiErrors implements ExceptionFilter {
     const response = host.switchToHttp().getResponse<Response>();
     const failure = knownFailure(error);
     if (failure) {
+      if (failure.status === 401) response.setHeader('WWW-Authenticate', 'Bearer');
       response.status(failure.status).json(failure);
       return;
     }
