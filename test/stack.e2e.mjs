@@ -141,3 +141,24 @@ test('returns documented errors and rejects oversized bodies', async () => {
   assert.equal(malformed.body.code, 'BAD_REQUEST');
   assert(!JSON.stringify(malformed.body).includes('synthetic-untrusted-input'));
 });
+
+test('runtime clients cannot read migration metadata, write through the Mongo reader, or use Redis anonymously', async (t) => {
+  const postgres = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+  const mongo = new MongoClient(process.env.MONGO_URL);
+  const redisUrl = new URL(process.env.REDIS_URL);
+  redisUrl.password = '';
+  const redis = createClient({ url: redisUrl.toString(), socket: { reconnectStrategy: false } });
+  redis.on('error', () => undefined);
+  t.after(async () => {
+    if (redis.isOpen) redis.destroy();
+    await Promise.all([postgres.end(), mongo.close()]);
+  });
+  await assert.rejects(postgres.query('SELECT 1 FROM cataloggate_migrations'), { code: '42501' });
+  const audits = mongo.db(process.env.MONGO_DB).collection('catalog_audits');
+  await assert.rejects(
+    audits.updateOne({ _id: randomUUID() }, { $set: { supplier: 'northwind' } }),
+    { code: 13 },
+  );
+  await redis.connect();
+  await assert.rejects(redis.ping(), /NOAUTH/);
+});

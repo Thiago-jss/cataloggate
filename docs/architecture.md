@@ -43,5 +43,5 @@ Garantia intencional: **entrega pelo menos uma vez sob as falhas recuperáveis e
 - Apenas dois fornecedores fictícios e lotes JSON de 1 a 500 itens, limitados a 128 KiB e 20 níveis de aninhamento nos itens.
 - SKU é normalizado para maiúsculas; todas as linhas com o mesmo SKU válido são rejeitadas, inclusive quando uma delas também falha por outro motivo. Estoque deve ser um inteiro seguro não negativo, sem coerção.
 - Não publica estoque em outra plataforma. Não há frontend, autenticação, retenção automática, painel para redrive nem operação multi-tenant. A falha terminal exige análise do operador e uma nova submissão com outra chave.
-- As credenciais do Compose são fixtures locais, sem portas públicas nos bancos, cache ou broker. Não use dados reais. Um rollout público exigiria autenticação, autorização, gestão de segredos, limites por cliente e uma política de retenção.
+- As credenciais locais são geradas por instalação, sem portas públicas nos bancos, cache ou broker. Não use dados reais. Um rollout público exigiria autenticação, autorização, gestão de segredos, limites por cliente e uma política de retenção.
 - A migração versionada é aplicada por um processo único no startup do Compose. A stack de testes usa dados isolados; não se executa interrupção de dependências em serviços compartilhados.
