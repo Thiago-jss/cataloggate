@@ -1,6 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
+import { inTransaction } from '../../platform/transaction';
 import type {
   AuditTotals,
+  Delivery,
   ImportStatus,
   IntakeStore,
   NewImport,
@@ -14,6 +17,7 @@ type Row = {
   supplier_code: string;
   fingerprint: string;
   state: ImportStatus['status'];
+  generation: number;
   item_count: number;
   submitted_at: Date;
   finished_at: Date | null;
@@ -26,6 +30,7 @@ function toStatus(row: Row): ImportStatus {
     id: row.id,
     supplier: row.supplier_code,
     status: row.state,
+    generation: row.generation,
     itemCount: row.item_count,
     submittedAt: row.submitted_at.toISOString(),
     finishedAt: row.finished_at?.toISOString() ?? null,
@@ -101,38 +106,78 @@ export class PostgresImports implements IntakeStore, WorkStore, StatusStore {
   async find(id: string, supplier: string): Promise<ImportStatus | null> {
     const { rows } = await this.pool.query<Row>(
       `
-      SELECT id, supplier_code, state, item_count, submitted_at, finished_at, accepted_count, rejected_count
+      SELECT id, supplier_code, state, generation, item_count, submitted_at, finished_at, accepted_count, rejected_count
       FROM catalog_imports WHERE id = $1 AND supplier_code = $2`,
       [id, supplier],
     );
     return rows[0] ? toStatus(rows[0]) : null;
   }
 
-  async pending(id: string): Promise<WorkItem | null> {
-    const { rows } = await this.pool.query<WorkItem>(
-      `
-      SELECT id, supplier_code AS supplier, supplier_format AS format, payload
-      FROM catalog_imports WHERE id = $1 AND state = 'pending'`,
-      [id],
-    );
-    return rows[0] ?? null;
+  begin({ importId, generation }: Delivery): Promise<WorkItem | null> {
+    return inTransaction(this.pool, async (client) => {
+      const { rows } = await client.query<Omit<WorkItem, 'runId'>>(
+        `SELECT supplier_code AS supplier, supplier_format AS format, payload
+        FROM catalog_imports WHERE id = $1 AND generation = $2 AND state = 'pending' FOR UPDATE`,
+        [importId, generation],
+      );
+      const work = rows[0];
+      if (!work) return null;
+      const runId = randomUUID();
+      await client.query(
+        'INSERT INTO import_attempts (id, import_id, generation) VALUES ($1, $2, $3)',
+        [runId, importId, generation],
+      );
+      return { ...work, runId };
+    });
   }
 
-  async finish(id: string, totals: AuditTotals): Promise<void> {
+  finish({ importId, generation }: Delivery, runId: string, totals: AuditTotals): Promise<boolean> {
+    return inTransaction(this.pool, async (client) => {
+      const updated = await client.query(
+        `UPDATE catalog_imports SET state = 'completed', finished_at = now(), payload = NULL,
+        accepted_count = $3, rejected_count = $4 WHERE id = $1 AND generation = $2 AND state = 'pending'`,
+        [importId, generation, totals.accepted, totals.rejected],
+      );
+      const completed = updated.rowCount === 1;
+      await client.query(
+        `UPDATE import_attempts SET outcome = $2, finished_at = clock_timestamp()
+        WHERE id = $1 AND outcome = 'running'`,
+        [runId, completed ? 'succeeded' : 'superseded'],
+      );
+      if (completed) await supersedeRunning(client, importId, generation);
+      return completed;
+    });
+  }
+
+  async recordFailure(runId: string): Promise<void> {
     await this.pool.query(
-      `
-      UPDATE catalog_imports SET state = 'completed', finished_at = now(), payload = NULL,
-        accepted_count = $2, rejected_count = $3 WHERE id = $1 AND state = 'pending'`,
-      [id, totals.accepted, totals.rejected],
+      `UPDATE import_attempts SET outcome = 'technical_failure', finished_at = clock_timestamp()
+      WHERE id = $1 AND outcome = 'running'`,
+      [runId],
     );
   }
 
-  async fail(id: string): Promise<boolean> {
-    const { rowCount } = await this.pool.query(
-      `UPDATE catalog_imports SET state = 'failed', finished_at = now()
-      WHERE id = $1 AND state = 'pending'`,
-      [id],
-    );
-    return rowCount === 1;
+  fail({ importId, generation }: Delivery): Promise<boolean> {
+    return inTransaction(this.pool, async (client) => {
+      const { rowCount } = await client.query(
+        `UPDATE catalog_imports SET state = 'failed', finished_at = now()
+        WHERE id = $1 AND generation = $2 AND state = 'pending'`,
+        [importId, generation],
+      );
+      if (rowCount === 1) await supersedeRunning(client, importId, generation);
+      return rowCount === 1;
+    });
   }
+}
+
+async function supersedeRunning(
+  client: PoolClient,
+  importId: string,
+  generation: number,
+): Promise<void> {
+  await client.query(
+    `UPDATE import_attempts SET outcome = 'superseded', finished_at = clock_timestamp()
+    WHERE import_id = $1 AND generation = $2 AND outcome = 'running'`,
+    [importId, generation],
+  );
 }

@@ -5,6 +5,7 @@ export type ImportStatus = {
   id: string;
   supplier: string;
   status: 'pending' | 'completed' | 'failed';
+  generation: number;
   itemCount: number;
   submittedAt: string;
   finishedAt: string | null;
@@ -19,7 +20,8 @@ export type NewImport = {
   payload: string;
   itemCount: number;
 };
-export type WorkItem = { id: string; supplier: string; format: SupplierFormat; payload: string };
+export type Delivery = { importId: string; generation: number };
+export type WorkItem = { runId: string; supplier: string; format: SupplierFormat; payload: string };
 export type StoredAudit = { id: string; supplier: string; payload: string; audit: Audit };
 export type AuditReport = { id: string; supplier: string; totals: AuditTotals } & Pick<
   Audit,
@@ -34,9 +36,10 @@ export interface IntakeStore {
 }
 
 export interface WorkStore {
-  pending(id: string): Promise<WorkItem | null>;
-  finish(id: string, totals: AuditTotals): Promise<void>;
-  fail(id: string): Promise<boolean>;
+  begin(delivery: Delivery): Promise<WorkItem | null>;
+  finish(delivery: Delivery, runId: string, totals: AuditTotals): Promise<boolean>;
+  recordFailure(runId: string): Promise<void>;
+  fail(delivery: Delivery): Promise<boolean>;
 }
 
 export interface StatusStore {

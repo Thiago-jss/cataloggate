@@ -7,7 +7,7 @@
 Com Node.js 24+, Docker e Docker Compose, na raiz do repositório:
 
 ```sh
-node scripts/bootstrap.mjs
+node scripts/bootstrap.mjs --extend
 docker compose up -d --build --wait
 docker compose run --rm --no-deps --build checks npm run demo
 ```
@@ -37,6 +37,9 @@ curl -i http://127.0.0.1:3180/imports \
 | `GET /imports/:id/preview`  | Prévia das alterações para o lote válido, com a versão base do catálogo.                                         |
 | `POST /imports/:id/publish` | Revisor publica com `expectedVersion`; uma prévia obsoleta é recusada.                                           |
 | `GET /imports/:id/release`  | Registro imutável da versão publicada por esse lote.                                                             |
+| `GET /imports/:id/attempts` | Histórico operacional do lote, para revisores do fornecedor.                                                     |
+| `POST /imports/:id/retry`   | Revisor reprocessa uma falha técnica com `expectedGeneration`.                                                   |
+| `GET /ops/metrics`          | Indicadores operacionais do fornecedor do revisor autenticado.                                                   |
 | `GET /health`               | Verifica se a API responde; não é uma inspeção das dependências.                                                 |
 
 Consulte o [contrato OpenAPI](docs/openapi.yaml) para exemplos, limites e códigos de resposta.
@@ -74,7 +77,7 @@ docker compose run --rm --no-deps checks
 
 O segundo comando roda testes HTTP com PostgreSQL, MongoDB, RabbitMQ e Redis reais. A suíte cobre os dois formatos, idempotência concorrente, entrega repetida, fila de mensagens rejeitadas, cache e entradas inválidas.
 
-A [CI](.github/workflows/ci.yml) também executa testes que **param e religam** RabbitMQ e Redis em um projeto Compose descartável. Para repetir esse teste localmente, encerre antes a stack padrão (ambas usam a porta 3180), use Node.js 24+ no host e execute:
+A [CI](.github/workflows/ci.yml) também executa testes que **param e religam** RabbitMQ, Redis, o worker e MongoDB em um projeto Compose descartável. O [runbook](docs/runbook.md) descreve diagnóstico e recuperação. Para repetir esse teste localmente, encerre antes a stack padrão (ambas usam a porta 3180), use Node.js 24+ no host e execute:
 
 ```sh
 docker compose down

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { completed, demoKey, fixture, request, submit } from '../scripts/client.mjs';
+import { completed, demoKey, fixture, request, submit, until } from '../scripts/client.mjs';
 
 const project = process.env.CATALOGGATE_TEST_PROJECT;
 assert(
@@ -54,4 +55,107 @@ test('reads the same report from durable storage with Redis offline', async () =
   } finally {
     await compose('start', 'redis');
   }
+});
+
+test('retains work across worker interruption and reprocesses a real technical failure exactly once per generation', async () => {
+  const reviewer = demoKey('northwind', 'reviewer');
+  const getStatus = (id) => request('/imports/' + id, undefined, base);
+  const history = (id, token = reviewer) =>
+    request('/imports/' + id + '/attempts', undefined, base, token);
+  const metrics = () => request('/ops/metrics', undefined, base, reviewer);
+  const retry = (id, expectedGeneration, token = reviewer) =>
+    request(
+      '/imports/' + id + '/retry',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ expectedGeneration }),
+      },
+      base,
+      token,
+    );
+
+  const before = await metrics();
+  assert.equal(before.status, 200);
+  let waiting;
+  await compose('stop', 'worker');
+  try {
+    waiting = await submit(await fixture('northwind'), undefined, base);
+    assert.equal(waiting.status, 202);
+    assert.equal((await getStatus(waiting.body.id)).body.status, 'pending');
+    assert((await metrics()).body.pendingImports > before.body.pendingImports);
+  } finally {
+    await compose('start', 'worker');
+  }
+  await completed(waiting.body.id, base);
+  assert.equal((await retry(waiting.body.id, 1)).body.code, 'RETRY_NOT_AVAILABLE');
+
+  const sku = 'RECOVERY-' + randomUUID().toUpperCase();
+  let id;
+  await compose('stop', 'mongo');
+  try {
+    const submitted = await submit(
+      { supplier: 'northwind', items: [{ sku, stock: 7 }] },
+      undefined,
+      base,
+    );
+    assert.equal(submitted.status, 202);
+    id = submitted.body.id;
+    const failed = await until(async () => {
+      const status = await getStatus(id);
+      assert.equal(status.status, 200);
+      return status.body.status === 'failed' ? status.body : null;
+    }, 'terminal failure while MongoDB is offline');
+    assert.equal(failed.generation, 1);
+    assert.deepEqual(
+      (await history(id)).body.attempts.map(({ generation, outcome }) => [generation, outcome]),
+      [
+        [1, 'technical_failure'],
+        [1, 'technical_failure'],
+        [1, 'technical_failure'],
+      ],
+    );
+    assert((await metrics()).body.failedAttempts >= before.body.failedAttempts + 3);
+    assert.equal((await retry(id, 1, demoKey())).status, 403);
+    assert.equal((await retry(id, 1, demoKey('trailforge', 'reviewer'))).status, 404);
+    assert.equal((await history(id, demoKey('trailforge', 'reviewer'))).status, 404);
+  } finally {
+    await compose('start', 'mongo');
+    await compose('up', '-d', '--no-deps', '--wait', 'mongo');
+  }
+  const retries = await Promise.all([retry(id, 1), retry(id, 1)]);
+  assert.deepEqual(retries.map(({ status }) => status).sort(), [202, 409]);
+  assert.equal(retries.find(({ status }) => status === 409).body.code, 'STALE_GENERATION');
+  const done = await completed(id, base);
+  assert.equal(done.generation, 2);
+  assert.deepEqual(done.totals, { accepted: 1, rejected: 0 });
+  const log = await history(id);
+  assert.deepEqual(
+    log.body.attempts.map(({ generation, outcome }) => [generation, outcome]),
+    [
+      [2, 'succeeded'],
+      [1, 'technical_failure'],
+      [1, 'technical_failure'],
+      [1, 'technical_failure'],
+    ],
+  );
+  assert.deepEqual(
+    log.body.retries.map(({ generation, requestedBy }) => [generation, requestedBy]),
+    [[2, 'northwind-reviewer']],
+  );
+  const preview = await request('/imports/' + id + '/preview', undefined, base, reviewer);
+  const publication = () =>
+    request(
+      '/imports/' + id + '/publish',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ expectedVersion: preview.body.baseVersion }),
+      },
+      base,
+      reviewer,
+    );
+  const publications = await Promise.all([publication(), publication()]);
+  assert.deepEqual(publications.map(({ status }) => status).sort(), [201, 409]);
+  assert.equal(publications.find(({ status }) => status === 201).body.changes[0].sku, sku);
 });
