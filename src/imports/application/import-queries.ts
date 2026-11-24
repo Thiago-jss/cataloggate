@@ -4,8 +4,8 @@ import { ImportNotFound, InconsistentReport, ReportNotAvailable } from './import
 export class ReadImport {
   constructor(private readonly statusStore: StatusStore) {}
 
-  async execute(id: string): Promise<ImportStatus> {
-    const found = await this.statusStore.find(id);
+  async execute(id: string, supplier: string): Promise<ImportStatus> {
+    const found = await this.statusStore.find(id, supplier);
     if (!found) throw new ImportNotFound();
     return found;
   }
@@ -18,13 +18,13 @@ export class ReadReport {
     private readonly cache: ReportCache,
   ) {}
 
-  async execute(id: string): Promise<AuditReport> {
-    const found = await this.imports.execute(id);
+  async execute(id: string, supplier: string): Promise<AuditReport> {
+    const found = await this.imports.execute(id, supplier);
     if (found.status !== 'completed' || !found.totals) throw new ReportNotAvailable();
     const cached = await this.cache.get(id);
     if (cached) return cached;
     const document = await this.audits.get(id);
-    if (!document) throw new InconsistentReport();
+    if (!document || document.supplier !== supplier) throw new InconsistentReport();
     const input: unknown[] = JSON.parse(document.payload);
     const report = {
       id,

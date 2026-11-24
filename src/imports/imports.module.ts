@@ -4,6 +4,11 @@ import {
   type OnApplicationShutdown,
   type Provider,
 } from '@nestjs/common';
+import { CatalogReview } from '../catalog/application/catalog-review';
+import { ReviewsController } from '../catalog/http/reviews-controller';
+import { PostgresCatalog } from '../catalog/infrastructure/postgres-catalog';
+import { ActorGuard } from '../identity/actor-guard';
+import { PostgresActors } from '../identity/postgres-actors';
 import { openMongo, openPostgres } from '../platform/clients';
 import type { loadApiEnvironment, loadDataEnvironment } from '../platform/environment';
 import { DispatchImports } from './application/dispatch-imports';
@@ -57,9 +62,21 @@ export class ImportsModule {
   static api(env: ApiEnvironment): DynamicModule {
     return {
       module: ImportsModule,
-      controllers: [ImportsController, HealthController],
+      controllers: [ImportsController, ReviewsController, HealthController],
       providers: [
         ...stores(env),
+        ActorGuard,
+        {
+          provide: PostgresActors,
+          inject: [DatabaseClients],
+          useFactory: (db: DatabaseClients) => new PostgresActors(db.postgres),
+        },
+        {
+          provide: CatalogReview,
+          inject: [ReadImport, MongoAudits, DatabaseClients],
+          useFactory: (imports: ReadImport, audits: MongoAudits, db: DatabaseClients) =>
+            new CatalogReview(imports, audits, new PostgresCatalog(db.postgres)),
+        },
         {
           provide: SubmitImport,
           inject: [PostgresImports],

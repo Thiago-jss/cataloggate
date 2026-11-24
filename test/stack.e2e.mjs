@@ -5,7 +5,7 @@ import { connect } from 'amqplib';
 import { MongoClient } from 'mongodb';
 import pg from 'pg';
 import { createClient } from 'redis';
-import { completed, fixture, request, submit, until } from '../scripts/client.mjs';
+import { completed, demoKey, fixture, request, submit, until } from '../scripts/client.mjs';
 
 const queue = 'cataloggate.imports.v1';
 const deadQueue = 'cataloggate.imports.dead.v1';
@@ -20,7 +20,7 @@ async function broker(t) {
 async function submitAndWait(input) {
   const accepted = await submit(input);
   assert.equal(accepted.status, 202);
-  return completed(accepted.body.id);
+  return completed(accepted.body.id, undefined, demoKey(input.supplier));
 }
 
 test('produces reports for both supplier formats and serves a cached report with TTL', async (t) => {
@@ -46,7 +46,12 @@ test('produces reports for both supplier formats and serves a cached report with
   assert.deepEqual((await request(reportPath(northStatus.id))).body, north.body);
   const trailforge = await fixture('trailforge');
   const trailStatus = await submitAndWait(trailforge);
-  const trail = await request(reportPath(trailStatus.id));
+  const trail = await request(
+    reportPath(trailStatus.id),
+    undefined,
+    undefined,
+    demoKey('trailforge'),
+  );
   assert.equal(trail.status, 200);
   assert.deepEqual(trail.body, {
     id: trailStatus.id,
@@ -161,4 +166,110 @@ test('runtime clients cannot read migration metadata, write through the Mongo re
   );
   await redis.connect();
   await assert.rejects(redis.ping(), /NOAUTH/);
+});
+
+async function approval(id, expectedVersion, token = demoKey('northwind', 'reviewer')) {
+  return request(
+    '/imports/' + id + '/publish',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedVersion }),
+    },
+    undefined,
+    token,
+  );
+}
+
+async function preview(id) {
+  return request('/imports/' + id + '/preview');
+}
+
+test('authenticates roles and denies cross-supplier reads even when the report is cached', async () => {
+  const id = (await submitAndWait(await fixture('northwind'))).id;
+  assert.equal((await request('/imports/' + id, undefined, undefined, null)).status, 401);
+  assert.equal((await request('/imports/' + id, undefined, undefined, 'f'.repeat(64))).status, 401);
+  assert.equal((await request(reportPath(id))).status, 200);
+  const other = demoKey('trailforge', 'reviewer');
+  assert.equal((await request('/imports/' + id, undefined, undefined, other)).status, 404);
+  assert.equal((await request(reportPath(id), undefined, undefined, other)).status, 404);
+  assert.equal((await approval(id, 0, other)).status, 404);
+  assert.equal((await approval(id, 0, demoKey())).status, 403);
+  assert.equal((await approval(id, 0)).body.code, 'REJECTED_ITEMS');
+  assert.equal(
+    (
+      await submit(
+        await fixture('northwind'),
+        undefined,
+        undefined,
+        demoKey('northwind', 'reviewer'),
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (await submit(await fixture('trailforge'), undefined, undefined, demoKey())).status,
+    404,
+  );
+});
+
+test('publishes a reviewed diff atomically, prevents duplicate and stale releases, and preserves history', async (t) => {
+  const pgPool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+  t.after(() => pgPool.end());
+  const sku = 'SKU-' + randomUUID().toUpperCase();
+  const queueBatch = (stock) => submitAndWait({ supplier: 'northwind', items: [{ sku, stock }] });
+  const [first, second] = await Promise.all([queueBatch(10), queueBatch(20)]);
+  const [previewA, previewB] = await Promise.all([preview(first.id), preview(second.id)]);
+  assert.equal(previewA.status, 200);
+  assert.equal(previewB.status, 200);
+  const version = previewA.body.baseVersion;
+  assert.equal(previewB.body.baseVersion, version);
+  assert.deepEqual(previewA.body.changes, [{ sku, before: null, after: 10, kind: 'added' }]);
+
+  const concurrent = await Promise.all([
+    approval(first.id, version),
+    approval(first.id, version),
+    approval(second.id, version),
+  ]);
+  assert.deepEqual(concurrent.map((item) => item.status).sort(), [201, 409, 409]);
+  const winner = concurrent.find((item) => item.status === 201).body;
+  assert.equal(winner.version, version + 1);
+  assert.equal(winner.approvedBy, 'northwind-reviewer');
+  const loser = winner.importId === first.id ? second.id : first.id;
+  assert.equal((await approval(winner.importId, version)).body.code, 'ALREADY_PUBLISHED');
+  assert.equal((await approval(loser, version)).body.code, 'STALE_PREVIEW');
+  const nextPreview = await preview(loser);
+  assert.equal(nextPreview.body.baseVersion, version + 1);
+  assert.equal(nextPreview.body.changes[0].before, winner.changes[0].after);
+  assert.equal(nextPreview.body.changes[0].kind, 'updated');
+  const published = await approval(loser, nextPreview.body.baseVersion);
+  assert.equal(published.status, 201);
+  assert.equal(published.body.version, version + 2);
+  assert.deepEqual((await request('/imports/' + winner.importId + '/release')).body, winner);
+  assert.equal(
+    (
+      await request(
+        '/imports/' + winner.importId + '/release',
+        undefined,
+        undefined,
+        demoKey('trailforge'),
+      )
+    ).status,
+    404,
+  );
+  const stored = await pgPool.query(
+    'SELECT stock FROM catalog_inventory WHERE supplier_code = $1 AND sku = $2',
+    ['northwind', sku],
+  );
+  assert.equal(Number(stored.rows[0].stock), published.body.changes[0].after);
+  const releases = await pgPool.query(
+    'SELECT version FROM catalog_releases WHERE import_id = ANY($1::uuid[]) ORDER BY version',
+    [[first.id, second.id]],
+  );
+  assert.deepEqual(
+    releases.rows.map((row) => row.version),
+    [version + 1, version + 2],
+  );
+  const noChange = await queueBatch(published.body.changes[0].after);
+  assert.equal((await approval(noChange.id, version + 2)).body.code, 'NO_CHANGES');
 });

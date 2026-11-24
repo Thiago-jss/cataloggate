@@ -1,5 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { provisionDemoActors } from '../identity/provision-demo';
 import { openPostgres } from './clients';
 import { loadDatabaseUrl } from './environment';
 
@@ -27,6 +28,7 @@ async function migrate(): Promise<void> {
         await client.query('INSERT INTO cataloggate_migrations (filename) VALUES ($1)', [file]);
         console.log(`Applied migration: ${file}`);
       }
+      await provisionDemoActors(client);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');

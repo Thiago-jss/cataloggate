@@ -2,7 +2,7 @@
 
 ## Fronteiras
 
-O CatalogGate implementa uma capacidade: auditar um lote que ainda não foi publicado na loja. A API e o worker compartilham código e persistência, mas são processos separados. O consumidor não depende do servidor HTTP estar no ar. O publicador da outbox roda junto com a API e volta a ler as pendências quando o processo reinicia.
+O CatalogGate audita lotes, separa problemas de negócio de falhas técnicas e permite publicar atualizações de estoque após revisão. A API e o worker compartilham código e persistência, mas são processos separados. O consumidor não depende do servidor HTTP estar no ar. O publicador da outbox roda junto com a API e volta a ler as pendências quando o processo reinicia.
 
 ```text
 src/
@@ -25,6 +25,12 @@ Os contratos de leitura, submissão e execução são separados: ler um relatór
 4. O worker interpreta o lote e faz um upsert imutável no MongoDB, com `_id` igual ao protocolo. O documento guarda o JSON original como texto e tem resultados estruturados (linhas aceitas e motivos de rejeição). Não há uso de campos externos como operadores ou chaves de consulta. O PostgreSQL passa para `completed`, grava os totais e libera o buffer somente depois da gravação no MongoDB. O relatório fica visível só depois dessa transição.
 5. A consulta confirma o estado no PostgreSQL, depois usa Redis como cache-aside do relatório consolidado. Resultados concluídos não mudam nesta versão; uma correção é um novo lote. Isso dispensa invalidar relatórios existentes a cada envio.
 
+## Revisão e publicação
+
+O catálogo tem uma versão por fornecedor. Ao visualizar a prévia, a API lê a versão e os SKUs relevantes em um único snapshot de leitura. A aprovação envia essa versão base. Em uma transação PostgreSQL, o sistema serializa publicações daquele fornecedor, verifica versão e autoria, aplica os SKUs alterados, registra o efeito e o revisor na publicação imutável e avança a versão. Ausência de SKU no lote não exclui estoque; lote sem mudança não gera versão. Relatório em cache não autoriza nem alimenta a publicação: ela depende do escopo no PostgreSQL e da auditoria durável.
+
+O operador envia; o revisor publica. As duas identidades só consultam o próprio fornecedor. Lotes anteriores à introdução da autoria continuam consultáveis e não podem ser publicados. Não existe publicação automática ou propagação para uma loja externa.
+
 ## Janelas de falha
 
 | Falha                                                                           | Comportamento                                                                                                                                                                                                                        |
@@ -42,6 +48,6 @@ Garantia intencional: **entrega pelo menos uma vez sob as falhas recuperáveis e
 
 - Apenas dois fornecedores fictícios e lotes JSON de 1 a 500 itens, limitados a 128 KiB e 20 níveis de aninhamento nos itens.
 - SKU é normalizado para maiúsculas; todas as linhas com o mesmo SKU válido são rejeitadas, inclusive quando uma delas também falha por outro motivo. Estoque deve ser um inteiro seguro não negativo, sem coerção.
-- Não publica estoque em outra plataforma. Não há frontend, autenticação, retenção automática, painel para redrive nem operação multi-tenant. A falha terminal exige análise do operador e uma nova submissão com outra chave.
-- As credenciais locais são geradas por instalação, sem portas públicas nos bancos, cache ou broker. Não use dados reais. Um rollout público exigiria autenticação, autorização, gestão de segredos, limites por cliente e uma política de retenção.
+- Não integra uma loja externa. Não há frontend, retenção automática, painel de recuperação ou multi-tenancy organizacional. As permissões de demonstração são escopadas por fornecedor. A falha terminal exige análise do operador e uma nova submissão com outra chave.
+- As credenciais locais são geradas por instalação, sem portas públicas nos bancos, cache ou broker. Não use dados reais. Um rollout público exigiria gestão de identidade e segredos, TLS, limites por cliente, uma política de retenção e operação do ambiente.
 - A migração versionada é aplicada por um processo único no startup do Compose. A stack de testes usa dados isolados; não se executa interrupção de dependências em serviços compartilhados.

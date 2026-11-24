@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { completed, fixture, request, submit } from '../scripts/client.mjs';
+import { completed, demoKey, fixture, request, submit } from '../scripts/client.mjs';
 
 const project = process.env.CATALOGGATE_TEST_PROJECT;
 assert(
@@ -41,13 +41,14 @@ test('accepts a batch during an actual broker outage and processes it after Rabb
 test('reads the same report from durable storage with Redis offline', async () => {
   const accepted = await submit(await fixture('trailforge'), undefined, base);
   assert.equal(accepted.status, 202);
-  await completed(accepted.body.id, base);
+  const token = demoKey('trailforge');
+  await completed(accepted.body.id, base, token);
   const path = '/imports/' + accepted.body.id + '/report';
-  const before = await request(path, undefined, base);
+  const before = await request(path, undefined, base, token);
   assert.equal(before.status, 200);
   await compose('stop', 'redis');
   try {
-    const fallback = await request(path, undefined, base);
+    const fallback = await request(path, undefined, base, token);
     assert.equal(fallback.status, 200);
     assert.deepEqual(fallback.body, before.body);
   } finally {

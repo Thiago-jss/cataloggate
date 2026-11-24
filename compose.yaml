@@ -9,6 +9,12 @@ x-read-environment: &read-environment
   MONGO_URL: mongodb://audit_reader:${MONGO_READER_PASSWORD:?run node scripts/bootstrap.mjs}@mongo:27017/?authSource=cataloggate
   REDIS_URL: redis://:${REDIS_PASSWORD:?run node scripts/bootstrap.mjs}@redis:6379
 
+x-demo-auth: &demo-auth
+  NORTHWIND_OPERATOR_KEY: ${NORTHWIND_OPERATOR_KEY:?run node scripts/bootstrap.mjs --extend}
+  NORTHWIND_REVIEWER_KEY: ${NORTHWIND_REVIEWER_KEY:?run node scripts/bootstrap.mjs --extend}
+  TRAILFORGE_OPERATOR_KEY: ${TRAILFORGE_OPERATOR_KEY:?run node scripts/bootstrap.mjs --extend}
+  TRAILFORGE_REVIEWER_KEY: ${TRAILFORGE_REVIEWER_KEY:?run node scripts/bootstrap.mjs --extend}
+
 x-runtime: &runtime
   image: cataloggate-runtime:local
   build:
@@ -90,6 +96,7 @@ services:
     <<: *runtime
     command: [node, dist/platform/migrate.js]
     environment:
+      <<: *demo-auth
       DATABASE_URL: postgres://cataloggate_migrator:${POSTGRES_MIGRATION_PASSWORD:?run node scripts/bootstrap.mjs}@postgres:5432/cataloggate
     depends_on:
       postgres:
@@ -140,7 +147,7 @@ services:
       context: .
       target: checks
     environment:
-      <<: [*app-environment, *read-environment]
+      <<: [*app-environment, *read-environment, *demo-auth]
       CATALOGGATE_URL: http://api:3000
 
 volumes:
